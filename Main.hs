@@ -29,13 +29,13 @@ import Data.Attoparsec.Text hiding (try)
 import Data.Attoparsec.Combinator (lookAhead)
 import Text.Printf
 import Distribution.PackageDescription
-import Distribution.PackageDescription.Parse
 import Distribution.Verbosity (normal)
 import Distribution.Simple.Utils (findPackageDesc)
 import Distribution.ModuleName (toFilePath, components)
 import Language.Haskell.Exts as E
 import Language.Preprocessor.Cpphs
 import Network.HTTP
+import Distribution.Simple.PackageDescription (readGenericPackageDescription)
 
 main :: IO ()
 main = do
