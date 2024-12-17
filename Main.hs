@@ -154,56 +154,56 @@ cabalInstall args = do
 downloadPackage :: String -> FilePath -> ExceptT String IO ()
 downloadPackage pkg destination = cabalInstall [ "get", pkg, "--destdir=" ++ destination ]
 
-data ExportCmp = EAdded | ERemoved | EModified String {- Old signature -} | EUnmodified
+data ExportCmp = EAdded | ERemoved | EModified T.Text {- Old signature -} | EUnmodified
                  deriving (Show, Eq, Ord)
 
-data ModuleCmp = MAdded [String]                 -- Module was added
+data ModuleCmp = MAdded [T.Text]                 -- Module was added
                | MAddedParseError                -- Like above, but we couldn't parse the new one
-               | MRemoved [String]               -- Module was removed
+               | MRemoved [T.Text]               -- Module was removed
                | MRemovedParseError              -- Like above, but we couldn't parse the old one
                | MNotSureIfModifiedParseError    -- New and/or old didn't parse, can't tell
-               | MModified [(ExportCmp, String)] -- Modified
+               | MModified [(ExportCmp, T.Text)] -- Modified
                | MUnmodifed                      -- Changed
                  deriving (Show, Eq, Ord)
 
-type Diff = [(ModuleCmp, String)]
+type Diff = [(ModuleCmp, T.Text)]
 
 -- Print out the computed difference, optionally with ANSI colors
 outputDiff :: Diff -> Bool -> Bool -> IO ()
 outputDiff diff disableColor disableLengend = do
     let putStrCol color str
-            | disableColor = liftIO $ putStr str
-            | otherwise    = liftIO . putStr $ setSGRCode [SetColor Foreground Vivid color] ++
-                                               str ++ setSGRCode [Reset]
+            | disableColor = liftIO $ TI.putStr str
+            | otherwise    = liftIO . TI.putStr $ T.pack (setSGRCode [SetColor Foreground Vivid color]) <>
+                                               str <> T.pack (setSGRCode [Reset])
         putStrLnCol color str = liftIO $ putStrCol color str >> putStrLn ""
     breakingChanges <- flip execStateT (0 :: Int) . forM_ diff $ \case
         (MAdded exps                 , mname) -> do
-            putStrLnCol Green $ "+ " ++ mname
-            mapM_ (putStrLnCol Green . printf "  + %s") exps
+            putStrLnCol Green $ "+ " <> mname
+            mapM_ (\e -> putStrLnCol Green . T.pack $ printf "  + %s" (T.unpack e)) exps
         (MAddedParseError            , mname) ->
-            putStrLnCol Green $
+            putStrLnCol Green . T.pack $
                 printf " + %s (ERROR: failed to parse new version, exports not available)" mname
         (MRemoved exps               , mname) -> do
-            putStrLnCol Red $ "- " ++ mname
-            mapM_ (\e -> modify' (+ 1) >> putStrLnCol Red (printf "  - %s" e)) exps
+            putStrLnCol Red $ "- " <> mname
+            mapM_ (\e -> modify' (+ 1) >> putStrLnCol Red (T.pack (printf "  - %s" (T.unpack e)))) exps
         (MRemovedParseError          , mname) -> do
             modify' (+ 1)
             putStrLnCol Red $
-                " - " ++ mname ++ " (ERROR: failed to parse old version, exports not available)"
+                " - " <> mname <> " (ERROR: failed to parse old version, exports not available)"
         (MNotSureIfModifiedParseError, mname) -> do
-            putStrLnCol Yellow $ "× " ++ mname ++
+            putStrLnCol Yellow $ "× " <> mname <>
                 " (Potentially modified, ERROR: failed to parse new and/or old version)"
         (MModified exps              , mname) -> do
-            putStrLnCol Yellow $ "× " ++ mname
+            putStrLnCol Yellow $ "× " <> mname
             forM_ exps $ \(cmp, expname) -> case cmp of
-                EAdded        ->    putStrLnCol Green  $ "  + "      ++ expname
+                EAdded        ->    putStrLnCol Green  $ "  + "      <> expname
                 ERemoved      -> do modify' (+ 1)
-                                    putStrLnCol Red    $ "  - "      ++ expname
+                                    putStrLnCol Red    $ "  - "      <> expname
                 EModified old -> do modify' (+ 1)
-                                    putStrLnCol Yellow $ "  × New: " ++ expname ++ "\n" ++
-                                                         "    Old: " ++ old
+                                    putStrLnCol Yellow $ "  × New: " <> expname <> "\n" <>
+                                                         "    Old: " <> old
                 EUnmodified   -> return ()
-        (MUnmodifed                  , mname) -> putStrLnCol White $ "· " ++ mname
+        (MUnmodifed                  , mname) -> putStrLnCol White $ "· " <> mname
     unless disableLengend $ do
         putStrLn ""
         putStrCol Green  "[+ Added] "
@@ -211,7 +211,7 @@ outputDiff diff disableColor disableLengend = do
         putStrCol Yellow "[× Modified] "
         putStrCol White  "[· Unmodified]\n"
     unless (breakingChanges == 0) $
-        putStrLnCol Red $ printf "\n%i potential breaking changes found" breakingChanges
+        putStrLnCol Red . T.pack $ printf "\n%i potential breaking changes found" breakingChanges
 
 -- All the parameters required by the various compute* functions that actually prepare the
 -- data and compute the difference
@@ -328,25 +328,25 @@ diffHoogleDB dbA dbB = do
         modulesRemoved = allANotInBBy ((==) `on` fst) verA verB
         modulesKept    = intersectBy  ((==) `on` fst) verA verB
         resAdded       = flip map modulesAdded $ \(nm, exps) ->
-                             (MAdded . map (show) $ exps, T.unpack nm)
+                             (MAdded . map unparseDBEntry $ exps, nm)
         resRemoved     = flip map modulesRemoved $ \(nm, exps) ->
-                             (MRemoved . map (show) $ exps, T.unpack nm)
+                             (MRemoved . map unparseDBEntry $ exps, nm)
         resKept        =
             sortBy compareKept . flip map modulesKept $ \(mname, modA') ->
                 -- Did the exports change?
                 case (modA', snd <$> find ((== mname) . fst) verB) of
                     (_   , Nothing  )  -> -- This really should not ever happen here
-                                          (MNotSureIfModifiedParseError, T.unpack mname)
+                                          (MNotSureIfModifiedParseError, mname)
                     (modA, Just modB)
-                        | didExpChange -> (MModified expCmp            , T.unpack mname)
-                        | otherwise    -> (MUnmodifed                  , T.unpack mname)
+                        | didExpChange -> (MModified expCmp            , mname)
+                        | otherwise    -> (MUnmodifed                  , mname)
                       where -- Which exports were added / removed / modified?
                         didExpChange = or $ map (\case (EUnmodified, _) -> False; _ -> True) expCmp
                         expCmp       = expAdded ++ expRemoved ++ expKept
                         expAdded     =
-                            [(EAdded  , show x) | x <- allANotInBBy compareDBEName modB modA]
+                            [(EAdded  , unparseDBEntry x) | x <- allANotInBBy compareDBEName modB modA]
                         expRemoved   =
-                            [(ERemoved, show x) | x <- allANotInBBy compareDBEName modA modB]
+                            [(ERemoved, unparseDBEntry x) | x <- allANotInBBy compareDBEName modA modB]
                         expKept      =
                             -- We don't sort by modified / unmodified here as we currently
                             -- don't list the unmodified ones
@@ -354,15 +354,15 @@ diffHoogleDB dbA dbB = do
                                 case find (compareDBEName eOld) modB of
                                     Nothing -> error "intersectBy / find is broken..."
                                     Just eNew | compareDBEType eOld eNew ->
-                                                    (EUnmodified, show eOld)
+                                                    (EUnmodified, unparseDBEntry eOld)
                                               | otherwise                ->
-                                                    (EModified $ show eOld, show eNew)
+                                                    (EModified $ unparseDBEntry eOld, unparseDBEntry eNew)
         -- Sort everything by modification type, but make sure we sort
         -- modified modules by their name, not their export list
         compareKept a b = case (a, b) of
                               ((MModified _, nameA), (MModified _, nameB)) -> compare nameA nameB
                               _ -> compare a b
-     in resAdded ++ resRemoved ++ resKept
+     in resAdded <> resRemoved <> resKept
 
 -- Stupid helper to build module / export lists. Should probably switch to using
 -- Data.Set for all of these operations to stop having O(n*m) everywhere
@@ -375,11 +375,12 @@ data DBEntry = DBModule   !T.Text
              | DBType     !T.Text !T.Text
              | DBNewtype  !T.Text !T.Text
              | DBData     !T.Text !T.Text
+             | DBPattern  !T.Text !T.Text
              | DBCtor     !T.Text !T.Text
              | DBClass    !T.Text !T.Text
              | DBInstance !T.Text !T.Text
              | DBFunction !T.Text !T.Text
-               deriving (Eq)
+               deriving (Eq, Show)
 
 -- When comparing names we have to take the kind of the export into account, i.e.
 -- type and value constructors may have the same name without being identical
@@ -423,8 +424,8 @@ compareDBEType a b =
         DBType _ _    -> stringTypeCmp
         DBNewtype _ _ -> stringTypeCmp
         -- Parse everything else in its entirety as a top-level declaration
-        _             -> case ( parseDeclWithMode mode $ show a
-                              , parseDeclWithMode mode $ show b
+        _             -> case ( parseDeclWithMode mode . T.unpack $ unparseDBEntry a
+                              , parseDeclWithMode mode . T.unpack $ unparseDBEntry b
                               ) of
                            (E.ParseOk resA, E.ParseOk resB) -> resA == resB
                            _                                -> stringTypeCmp
@@ -446,44 +447,47 @@ dbeName :: DBEntry -> T.Text
 dbeName = \case
     DBModule nm     -> nm; DBPkgInfo k _   -> k ; DBComment _     -> "";
     DBType nm _     -> nm; DBNewtype nm _  -> nm; DBData nm _     -> nm;
-    DBCtor nm _     -> nm; DBClass nm _    -> nm; DBInstance nm _ -> nm;
-    DBFunction nm _ -> nm
+    DBPattern nm _  -> nm; DBCtor nm _     -> nm; DBClass nm _    -> nm;
+    DBInstance nm _ -> nm; DBFunction nm _ -> nm
 
 -- Extract a database entry's "type" (i.e. a function type vs its name)
 dbeType :: DBEntry -> T.Text
 dbeType = \case
     DBModule _      -> "";  DBPkgInfo _ v   -> v ; DBComment _     -> "";
     DBType _ ty     -> ty;  DBNewtype _ ty  -> ty; DBData _ ty     -> ty;
-    DBCtor _ ty     -> ty;  DBClass _ ty    -> ty; DBInstance _ ty -> ty;
-    DBFunction _ ty -> ty
+    DBPattern _ ty  -> ty;  DBCtor _ ty     -> ty; DBClass _ ty    -> ty;
+    DBInstance _ ty -> ty;  DBFunction _ ty -> ty
 
-instance Show DBEntry where
-  show = \case
-    DBModule nm      -> "module " ++ T.unpack nm
-    DBPkgInfo k v    -> "@" ++ T.unpack k ++ T.unpack v
-    DBComment txt    -> "-- " ++ T.unpack txt
-    DBType nm ty     -> "type " ++ T.unpack nm ++ " " ++ T.unpack ty
-    DBNewtype nm ty  -> "newtype " ++ T.unpack nm ++ " " ++ T.unpack ty
-    DBData nm ty     -> "data " ++ T.unpack nm ++ (if T.null ty then "" else " " ++ T.unpack ty)
-    DBCtor nm ty     -> T.unpack nm ++ " :: " ++ T.unpack ty
-    DBClass _ ty     -> "class " ++ T.unpack ty
-    DBInstance _ ty  -> "instance " ++ T.unpack ty
-    DBFunction nm ty -> T.unpack nm ++ " :: " ++ T.unpack ty
+unparseDBEntry :: DBEntry -> T.Text
+unparseDBEntry = \case
+    DBModule nm      -> "module " <> nm
+    DBPkgInfo k v    -> "@" <> k <> v
+    DBComment txt    -> "-- " <> txt
+    DBType nm ty     -> "type " <> nm <> " " <> ty
+    DBNewtype nm ty  -> "newtype " <> nm <> " " <> ty
+    DBData nm ty     -> "data " <> nm <> (if T.null ty then "" else " " <> ty)
+    DBPattern nm ty  -> "pattern " <> nm <> " :: " <> ty
+    DBCtor nm ty     -> nm <> " :: " <> ty
+    DBClass _ ty     -> "class " <> ty
+    DBInstance _ ty  -> "instance " <> ty
+    DBFunction nm ty -> nm <> " :: " <> ty
 
 -- Parse a Hoogle text database
 hoogleDBParser :: Parser [DBEntry]
 hoogleDBParser = many parseLine
   where
-    parseLine     = (*>) skipEmpty $ parseComment  <|> parseData  <|> parsePkgInfo  <|>
-                                     parseDBModule <|> parseCtor  <|> parseNewtype  <|>
-                                     parseDBType   <|> parseClass <|> parseInstance <|>
-                                     parseFunction
+    parseLine     = (*>) skipEmpty $ parseComment <|> parseData  <|> parsePattern  <|>
+                                     parsePkgInfo <|> parseDBModule <|> parseCtor  <|>
+                                     parseNewtype <|> parseDBType <|> parseClass <|>
+                                     parseInstance <|> parseFunction
     parseComment  = string "-- " *> (DBComment <$> tillEoL)
     parsePkgInfo  = char '@' *> (DBPkgInfo <$> takeTill (== ' ') <*> tillEoL)
     parseData     = string "data " *>
                     ( (DBData <$> takeTill (`elem` [ ' ', '\n' ]) <* endOfLine <*> "") <|>
                       (DBData <$> takeTill (== ' ') <* skipSpace <*> tillEoL)
                     )
+    parsePattern = string "pattern " *>
+                    (DBPattern <$> takeTill (== ' ') <* skipSpace <* string "::" <*> tillEoL)
     parseNewtype  = string "newtype " *>
                     ( (DBNewtype <$> takeTill (`elem` [ ' ', '\n' ]) <* endOfLine <*> "") <|>
                       (DBNewtype <$> takeTill (== ' ') <* skipSpace <*> tillEoL)
@@ -553,8 +557,8 @@ computeDiffParseHaskell ComputeParams { .. } = do
            Main.parseModule modPath >>= either
                -- Errors only affecting single modules are recoverable, just
                -- print them instead of throwing
-               (\e -> putStrLn ("    " ++ e) >> return (modName, Nothing))
-               (\r ->                           return (modName, Just r ))
+               (\e -> putStrLn ("    " ++ e) >> return (T.pack modName, Nothing))
+               (\r ->                           return (T.pack modName, Just r ))
     -- Compute difference
     return $ comparePackageModules mListA mListB
 
@@ -580,7 +584,7 @@ parseModule modPath = runExceptT $ do
                       Right (E.ParseOk parsedModule) ->
                           return parsedModule
 
-type PackageModuleList = [(String, Maybe (Module SrcSpanInfo))]
+type PackageModuleList = [(T.Text, Maybe (Module SrcSpanInfo))]
 
 -- Compare two packages made up of readily parsed Haskell modules
 comparePackageModules :: PackageModuleList -> PackageModuleList -> Diff
@@ -592,12 +596,12 @@ comparePackageModules verA verB = do
         -- Build result Diff of modules
         resAdded       = flip map modulesAdded $ \case
                              (mname, Just m ) ->
-                                 (MAdded . map (prettyPrint) $ moduleExports m, mname)
+                                 (MAdded . map (T.pack . prettyPrint) $ moduleExports m, mname)
                              (mname, Nothing) ->
                                  (MAddedParseError, mname)
         resRemoved     = flip map modulesRemoved $ \case
                              (mname, Just m ) ->
-                                 (MRemoved . map (prettyPrint) $ moduleExports m, mname)
+                                 (MRemoved . map (T.pack . prettyPrint) $ moduleExports m, mname)
                              (mname, Nothing) ->
                                  (MRemovedParseError, mname)
                          -- TODO: This doesn't sort correctly by type of change + name
@@ -610,11 +614,12 @@ comparePackageModules verA verB = do
                                  | moduleExports modA == moduleExports modB
                                                 -> (MUnmodifed      , mname)
                                  | otherwise    -> (MModified expCmp, mname)
-                               where -- Which exports were added / removed?
+                               where
+                                     -- Which exports were added / removed?
                                      expCmp        =
-                                       [(EAdded     , prettyPrint x) | x <- expAdded     ] ++
-                                       [(ERemoved   , prettyPrint x) | x <- expRemoved   ] ++
-                                       [(EUnmodified, prettyPrint x) | x <- expUnmodified]
+                                       [(EAdded     , T.pack $ prettyPrint x) | x <- expAdded     ] ++
+                                       [(ERemoved   , T.pack $ prettyPrint x) | x <- expRemoved   ] ++
+                                       [(EUnmodified, T.pack $ prettyPrint x) | x <- expUnmodified]
                                        -- TODO: We do not look for type changes, no EModified
                                      expAdded      = allANotInBBy (==) (moduleExports modB)
                                                                        (moduleExports modA)
@@ -622,6 +627,7 @@ comparePackageModules verA verB = do
                                                                        (moduleExports modB)
                                      expUnmodified = intersectBy  (==) (moduleExports modA)
                                                                        (moduleExports modB)
+
         -- TODO: If the module does not have an export spec, we assume it exports nothing
         moduleExports (Module _ (Just (ModuleHead _ _ _ (Just (ExportSpecList _ exportSpec)))) _ _ _ ) = exportSpec
         moduleExports _                                                                                = []
