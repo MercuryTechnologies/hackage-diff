@@ -72,7 +72,7 @@ copyright:           (C) 2016 Tim C. Schroeder
 category:            Distribution
 build-type:          Simple
 -- extra-source-files:  
-cabal-version:       >=1.18
+cabal-version:       1.18
 
 source-repository head
     type:           git
